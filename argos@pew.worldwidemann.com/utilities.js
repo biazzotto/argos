@@ -9,19 +9,21 @@
  * (https://gnu.org/licenses/gpl.html)
  */
 
-const GLib = imports.gi.GLib;
-const Gio = imports.gi.Gio;
+import GObject from 'gi://GObject';
+import St from 'gi://St';
+import GLib from 'gi://GLib';
+import Clutter from 'gi://Clutter';
+import Gio from 'gi://Gio';
+import * as Config from 'resource:///org/gnome/shell/misc/config.js';
+import EMOJI from './emoji.js'
 
-const Extension = imports.misc.extensionUtils.getCurrentExtension();
-const EMOJI = Extension.imports.emoji.EMOJI;
-
-const BOXES = {
+export const BOXES = {
   l: "left",
   c: "center",
   r: "right"
 };
 
-function parseFilename(filename) {
+export function parseFilename(filename) {
   let settings = {
     updateOnOpen: false,
     updateInterval: null,
@@ -69,7 +71,7 @@ function parseFilename(filename) {
 
 // Performs (mostly) BitBar-compatible output line parsing
 // (see https://github.com/matryer/bitbar#plugin-api)
-function parseLine(lineString) {
+export function parseLine(lineString) {
   let line = {};
 
   let separatorIndex = lineString.indexOf("|");
@@ -129,20 +131,20 @@ function parseLine(lineString) {
 
   line.markup = line.text;
 
-  if (line.unescape !== "false")
+  if (!line.hasOwnProperty("unescape") || line.unescape !== "false")
     line.markup = GLib.strcompress(line.markup);
 
-  if (line.emojize !== "false") {
+  if (!line.hasOwnProperty("emojize") || line.emojize !== "false") {
     line.markup = line.markup.replace(/:([\w+-]+):/g, function(match, emojiName) {
       emojiName = emojiName.toLowerCase();
       return EMOJI.hasOwnProperty(emojiName) ? EMOJI[emojiName] : match;
     });
   }
 
-  if (line.trim !== "false")
+  if (!line.hasOwnProperty("trim") || line.trim !== "false")
     line.markup = line.markup.trim();
 
-  if (line.useMarkup === "false") {
+  if (line.hasOwnProperty("useMarkup") && line.useMarkup === "false") {
     line.markup = GLib.markup_escape_text(line.markup, -1);
     // Restore escaped ESC characters (needed for ANSI sequences)
     line.markup = line.markup.replace("&#x1b;", "\x1b");
@@ -150,7 +152,7 @@ function parseLine(lineString) {
 
   // Note that while it is possible to format text using a combination of Pango markup
   // and ANSI escape sequences, lines like "<b>ABC \e[1m DEF</b>" lead to unmatched tags
-  if (line.ansi !== "false")
+  if (!line.hasOwnProperty("ansi") || line.ansi !== "false")
     line.markup = ansiToMarkup(line.markup);
 
   if (markupAttributes.length > 0)
@@ -167,14 +169,15 @@ function parseLine(lineString) {
   }
 
   line.hasAction = line.hasOwnProperty("bash") || line.hasOwnProperty("href") ||
-    line.hasOwnProperty("eval") || line.refresh === "true";
+    line.hasOwnProperty("eval") ||
+    (line.hasOwnProperty("refresh") && line.refresh === "true");
 
   return line;
 }
 
-const ANSI_COLORS = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"];
+export const ANSI_COLORS = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"];
 
-function ansiToMarkup(text) {
+export function ansiToMarkup(text) {
   let markup = "";
 
   let markupAttributes = {};
@@ -244,7 +247,7 @@ function ansiToMarkup(text) {
 // Combines the benefits of spawn_sync (easy retrieval of output)
 // with those of spawn_async (non-blocking execution).
 // Based on https://github.com/optimisme/gjs-examples/blob/master/assets/spawn.js.
-function spawnWithCallback(workingDirectory, argv, envp, flags, childSetup, callback) {
+export function spawnWithCallback(workingDirectory, argv, envp, flags, childSetup, callback) {
   let [success, pid, stdinFile, stdoutFile, stderrFile] = GLib.spawn_async_with_pipes(
     workingDirectory, argv, envp, flags, childSetup);
 
@@ -272,7 +275,57 @@ function spawnWithCallback(workingDirectory, argv, envp, flags, childSetup, call
   });
 }
 
-function readStream(stream, callback) {
+export function getShellVersion(str) {
+  let versionParts = str.split(".");
+  let versionNumber = 0;
+
+  if (versionParts.length < 2) {
+    log("Invalid GNOME Shell version '" + str + "'");
+    return 0;
+  }
+
+  let major = Number(versionParts[0]);
+
+  if (major >= 40) {
+    // GNOME 40 and newer versioning scheme
+    // https://discourse.gnome.org/t/new-gnome-versioning-scheme/4235
+    // must be > 3.x.y with x <= 38
+    // For 40.x, the 3rd digit is ignored
+    // 40.alpha -> 33997
+    // 41.beta  -> 34098
+    // 41.rc    -> 34099
+    // 41.0     -> 34100
+    // 40.1     -> 34001
+    // 40.1.1   -> 34001
+    let testReleases = new Map([["alpha", -3], ["beta", -2], ["rc", -1]]);
+    let minor = testReleases.get(versionParts[1]);
+    let major = Number(versionParts[0]);
+
+    if (typeof minor === "undefined")
+      minor = Number(versionParts[1]);
+
+    if (major >= 40)
+      versionNumber = 30000 + major * 100 + minor;
+
+  } else if (versionParts.length === 3 && versionParts[0] === "3") {
+    versionNumber = versionParts.map(Number).reduce(function(previousValue, currentValue) {
+      return 100 * previousValue + currentValue;
+    });
+  };
+
+  if (versionNumber === 0) {
+    log("Unsupported GNOME Shell version '" + str + "'");
+    return 0;
+  }
+
+  return versionNumber;
+}
+
+export const SHELL_VERSION = getShellVersion(Config.PACKAGE_VERSION);
+const SHELL_3_32 = getShellVersion("3.32.0");
+const SHELL_3_34 = getShellVersion("3.34.0");
+
+export function readStream(stream, callback) {
   stream.read_line_async(GLib.PRIORITY_LOW, null, function(source, result) {
     let [line] = source.read_line_finish(result);
 
@@ -283,4 +336,8 @@ function readStream(stream, callback) {
       readStream(source, callback);
     }
   });
+}
+
+export function getActor(obj) {
+  return obj;
 }

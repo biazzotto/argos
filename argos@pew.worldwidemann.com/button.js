@@ -9,72 +9,72 @@
  * (https://gnu.org/licenses/gpl.html)
  */
 
-const Lang = imports.lang;
-const GLib = imports.gi.GLib;
-const Gio = imports.gi.Gio;
-const PanelMenu = imports.ui.panelMenu;
-const PopupMenu = imports.ui.popupMenu;
-const Mainloop = imports.mainloop;
+import GObject from 'gi://GObject';
+import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
+import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
-const Extension = imports.misc.extensionUtils.getCurrentExtension();
-const ArgosLineView = Extension.imports.lineview.ArgosLineView;
-const ArgosMenuItem = Extension.imports.menuitem.ArgosMenuItem;
-const Utilities = Extension.imports.utilities;
+import ArgosLineView from './lineview.js';
+import ArgosMenuItem from './menuitem.js';
+import * as Utilities from './utilities.js';
 
-var ArgosButton = new Lang.Class({
-  Name: "ArgosButton",
-  Extends: PanelMenu.Button,
+const cArgosButton = GObject.registerClass({
+  GTypeName: "ArgosButton",
+},
 
-  _init: function(file, settings) {
-    this.parent(0, "", false);
+class ArgosButton extends PanelMenu.Button {
+
+  _init(file, settings) {
+    super._init(0, "", false);
 
     this._file = file;
     this._updateInterval = settings.updateInterval;
 
     this._lineView = new ArgosLineView();
     this._lineView.setMarkup("<small><i>" + GLib.markup_escape_text(file.get_basename(), -1) + " ...</i></small>");
-    this.add_actor(this._lineView);
+    Utilities.getActor(this).add_child(this._lineView);
 
     this._isDestroyed = false;
 
     this._updateTimeout = null;
     this._cycleTimeout = null;
 
-    this.connect("destroy", Lang.bind(this, this._onDestroy));
+    this.connect("destroy", this._onDestroy.bind(this));
 
     this._updateRunning = false;
 
     this._update();
 
     if (settings.updateOnOpen) {
-      this.menu.connect("open-state-changed", Lang.bind(this, function(menu, open) {
-        if (open)
-          this.update();
-      }));
+      this.menu.connect("open-state-changed", (open) => {
+	if (open)
+	  this.update();
+      });
     }
-  },
+  }
 
-  _onDestroy: function() {
+  _onDestroy() {
     this._isDestroyed = true;
 
     if (this._updateTimeout !== null)
-      Mainloop.source_remove(this._updateTimeout);
+      GLib.source_remove(this._updateTimeout);
     if (this._cycleTimeout !== null)
-      Mainloop.source_remove(this._cycleTimeout);
+      GLib.source_remove(this._cycleTimeout);
 
     this.menu.removeAll();
-  },
+  }
 
-  update: function() {
+  update() {
     if (this._updateTimeout !== null) {
-      Mainloop.source_remove(this._updateTimeout);
+      GLib.source_remove(this._updateTimeout);
       this._updateTimeout = null;
     }
 
     this._update();
-  },
+  }
 
-  _update: function() {
+  _update() {
     if (this._updateRunning)
       return;
 
@@ -86,7 +86,7 @@ var ArgosButton = new Lang.Class({
 
     try {
       Utilities.spawnWithCallback(null, [this._file.get_path()], envp, 0, null,
-        Lang.bind(this, function(standardOutput) {
+        (standardOutput) => {
           this._updateRunning = false;
 
           if (this._isDestroyed)
@@ -95,20 +95,23 @@ var ArgosButton = new Lang.Class({
           this._processOutput(standardOutput.split("\n"));
 
           if (this._updateInterval !== null) {
-            this._updateTimeout = Mainloop.timeout_add_seconds(this._updateInterval, Lang.bind(this, function() {
-              this._updateTimeout = null;
-              this._update();
-              return false;
-            }));
+            this._updateTimeout =
+	      GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT,
+				       this._updateInterval,
+				       () => {
+					 this._updateTimeout = null;
+					 this._update();
+					 return false;
+				       });
           }
-        }));
+        });
     } catch (error) {
       log("Unable to execute file '" + this._file.get_basename() + "': " + error);
       this._updateRunning = false;
     }
-  },
+  }
 
-  _processOutput: function(output) {
+  _processOutput(output) {
     let buttonLines = [];
     let dropdownLines = [];
 
@@ -132,13 +135,13 @@ var ArgosButton = new Lang.Class({
     this.menu.removeAll();
 
     if (this._cycleTimeout !== null) {
-      Mainloop.source_remove(this._cycleTimeout);
+      GLib.source_remove(this._cycleTimeout);
       this._cycleTimeout = null;
     }
 
-    this.visible = buttonLines.length > 0 || !dropdownMode;
+    Utilities.getActor(this).visible = buttonLines.length > 0 || !dropdownMode;
 
-    if (!this.visible)
+    if (!Utilities.getActor(this).visible)
       return;
 
     if (buttonLines.length === 0) {
@@ -148,11 +151,11 @@ var ArgosButton = new Lang.Class({
     } else {
       this._lineView.setLine(buttonLines[0]);
       let i = 0;
-      this._cycleTimeout = Mainloop.timeout_add_seconds(3, Lang.bind(this, function() {
+      this._cycleTimeout = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 3, () => {
         i++;
         this._lineView.setLine(buttonLines[i % buttonLines.length]);
         return true;
-      }));
+      });
 
       for (let j = 0; j < buttonLines.length; j++) {
         if (buttonLines[j].dropdown !== "false")
@@ -191,7 +194,9 @@ var ArgosButton = new Lang.Class({
         menuItem.actor.insert_child_below(lineView, menuItem.label);
         menuItem.label.visible = false;
         menus[dropdownLines[i + 1].menuLevel] = menuItem.menu;
-      } else if ((i + 1) < dropdownLines.length && dropdownLines[i + 1].menuLevel === dropdownLines[i].menuLevel &&
+      } else if ((i + 1) < dropdownLines.length &&
+        dropdownLines[i + 1].menuLevel === dropdownLines[i].menuLevel &&
+        dropdownLines[i + 1].hasOwnProperty("alternate") &&
         dropdownLines[i + 1].alternate === "true") {
         menuItem = new ArgosMenuItem(this, dropdownLines[i], dropdownLines[i + 1]);
         // Skip alternate line
@@ -209,9 +214,11 @@ var ArgosButton = new Lang.Class({
     let menuItem = new PopupMenu.PopupMenuItem(this._file.get_basename(), {
       style_class: "argos-menu-item-edit"
     });
-    menuItem.connect("activate", Lang.bind(this, function() {
+    menuItem.connect("activate", () => {
       Gio.AppInfo.launch_default_for_uri("file://" + this._file.get_path(), null);
-    }));
+    });
     this.menu.addMenuItem(menuItem);
   }
 });
+
+export default cArgosButton;
